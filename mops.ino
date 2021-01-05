@@ -6,152 +6,190 @@
 #include "WiFiManager.h"
 #include <FS.h>
 #include <LittleFS.h>
+#include <Ticker.h>
 
-const char *WIFI_SSID = "MopsConfig";
-const char *WIFI_PASSWORD = "codetyphon";
 String mDNSName;
 String AccessCode;
 const int ServicePort = 80;
 ESP8266WebServer WebServer(ServicePort);
+Ticker ticker;
 
-const int led = 12;
-const int relay = 15;
-const int btn = 13;
+const int LED = 12;
+const int Relay = 15;
+const int Button = 13;
 
 int buttonState = LOW;
 int powerState = LOW;
 
 bool shouldSaveConfig = false;
 
+
+//-------------------------- Electrical Control ---------------------------
+void turnOn()
+{
+  Serial.println("Relay On");
+  digitalWrite(LED, LOW);
+  digitalWrite(Relay, HIGH);
+  powerState = HIGH;
+}
+
+void turnOff()
+{
+  Serial.println("Relay Off");
+  digitalWrite(LED, HIGH);
+  digitalWrite(Relay, LOW);
+  powerState = LOW;
+}
+
+void tick() {
+  digitalWrite(LED, !digitalRead(LED));
+}
+//####################### End Of Electrical Control #######################
+
+
+//--------------------------- Config Utilities ----------------------------
+String readFile(const char* path) {
+  if (!LittleFS.exists(path)) {
+    File fileToCreate = LittleFS.open(path, "w");
+    fileToCreate.print("");
+    fileToCreate.close();
+  }
+  File fileToRead = LittleFS.open(path, "r");
+  if (!fileToRead) {
+    Serial.print("Failed To Load File: ");
+    Serial.println(path);
+    return String("");
+  }
+  size_t size = fileToRead.size();
+  std::unique_ptr<char[]> buf(new char[size]);
+  fileToRead.readBytes(buf.get(), size);
+  fileToRead.close();
+  return String(buf.get());
+}
+
+bool writeFile(const char* path, String content) {
+  File fileToWrite = LittleFS.open(path, "w");
+  if (!fileToWrite) {
+    Serial.print("Failed To Write File: ");
+    Serial.println(path);
+    return false;
+  }
+  fileToWrite.print(content);
+  fileToWrite.close();
+  return true;
+}
+
 void saveConfigCallback () {
   shouldSaveConfig = true;
 }
 
-void turnon()
-{
-  Serial.println("turn on");
-  digitalWrite(led, LOW);    //led是低电平触发
-  digitalWrite(relay, HIGH); //继电器是高电平触发
-  powerState = HIGH;
+void configModeCallback (WiFiManager *myWiFiManager) {
+  Serial.println("Entered config mode");
+  Serial.println(WiFi.softAPIP());
+  //if you used auto generated SSID, print it
+  Serial.println(myWiFiManager->getConfigPortalSSID());
+  //entered config mode, make led toggle faster
+  ticker.attach(0.2, tick);
 }
+//######################## End Of Config Utilities ########################
 
-void turnoff()
-{
-  Serial.println("turn off");
-  digitalWrite(led, HIGH);
-  digitalWrite(relay, LOW);
-  powerState = LOW;
-}
 
+//--------------------------------- Setup ---------------------------------
 void setup(void)
 {
-  pinMode(led, OUTPUT);
-  pinMode(relay, OUTPUT);
-  pinMode(btn, INPUT);
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+  pinMode(Relay, OUTPUT);
+  pinMode(Button, INPUT);
+  turnOff();
   if (!LittleFS.begin()) {
-    Serial.println("LittleFS mount failed");
+    Serial.println("LittleFS Mount Failed");
     return;
   }
 
-  // Load mDNS name here
-  int charCount = 0;
-  File mDNSNameF = LittleFS.open("mdnsname", "rw");
-  while (charCount < 16 && mDNSNameF.available() > 0) {
-    mdnsname[charCount] = mDNSNameF.read();
-    charCount++;
-  }
-  
-  // Read access code here
-  charCount = 0;
-  File AccessCodeF = LittleFS.open("accesscode", "rw");
-  while (charCount < 16 && AccessCodeF.available() > 0) {
-    accesscode[charCount] = AccessCodeF.read();
-    charCount++;
-  }
-
-  turnoff();
-
-  Serial.begin(9600);
+  // Load Config File Here
+  mDNSName = readFile("/mDNSName");
+  AccessCode = readFile("/AccessCode");
 
   WiFiManager wifiManager;
+  wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(saveConfigCallback);
-  WiFiManagerParameter custom_mdnsname("mdns", "mDNS Name", mdnsname, 16);
-  WiFiManagerParameter custom_accesscode("accesscode", "Access Code", accesscode, 16);
+  WiFiManagerParameter custom_mdnsname("mdns", "mDNS Name", mDNSName.c_str(), 16);
+  WiFiManagerParameter custom_accesscode("accesscode", "Access Code", AccessCode.c_str(), 16);
   wifiManager.addParameter(&custom_mdnsname);
   wifiManager.addParameter(&custom_accesscode);
 
-  if (!wifiManager.autoConnect(WIFI_SSID, WIFI_PASSWORD)) {
+  if (!wifiManager.autoConnect()) {
     Serial.println("failed to connect and hit timeout");
     delay(3000);
     //reset and try again, or maybe put it to deep sleep
-    ESP.reset();
+    ESP.restart();
     delay(5000);
-  }
-  Serial.print("Connected to ");
-  Serial.println(ssid);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-
-  if (shouldSaveConfig) {
-    strncpy(mdnsname, custom_mdnsname.getValue(), 16);
-    mdnsname[16] = '\0';
-    strncpy(accesscode, custom_accesscode.getValue(), 16);
-    accesscode[16] = '\0';
-    AccessCodeF.print(accesscode);
-    mDNSNameF.print(mdnsname);
-  }
-
-  WebServer.on("/", []() {
-    WebServer.send(200, "text/plain", String(powerState));
-  });
-
-  WebServer.on("/switch", []() {
-    if (WebServer.method() != HTTP_POST) {
-      if (strncmp(accesscode, WebServer.arg("accesscode").c_str(), 16) == 0) {
-        bool stat = WebServer.arg("status");
-        if (stat) {
-          turnon();
-          WebServer.send(200, "text/plain", "power on");
-        } else {
-          turnoff();
-          WebServer.send(200, "text/plain", "power off");
-        }
-      } else
-        WebServer.send(401, "text/plain", "Unauthorized");
-    } else
-      WebServer.send(405, "text/plain", "Method Not Allowed");
-  });
-
-  WebServer.onNotFound([]() {
-    WebServer.send(404, "text/plain", "File Not Found");
-  });
+  } else {
+    digitalWrite(LED, HIGH);
   
-  WebServer.begin();
-  MDNS.addService("http", "tcp", ServicePort);
-  Serial.println("HTTP Server Started");
-
-  if (MDNS.begin(mdnsname))
-  {
-    Serial.print("mDNS responder started, mDNS name:\n\t");
-    Serial.println(mdnsname);
+    if (shouldSaveConfig) {
+      mDNSName = custom_mdnsname.getValue();
+      AccessCode = custom_accesscode.getValue();
+      // Write Config Files
+      writeFile("/mDNSName", mDNSName);
+      writeFile("/AccessCode", AccessCode);
+    }
+  
+    WebServer.on("/", []() {
+      WebServer.send(200, "text/plain", String(powerState));
+    });
+  
+    WebServer.on("/switch", []() {
+      if (WebServer.method() != HTTP_POST) {
+        if (AccessCode.compareTo(WebServer.arg("accesscode")) == 0) {
+          bool stat = WebServer.arg("status");
+          if (stat) {
+            turnOn();
+            WebServer.send(200, "text/plain", "Power ON");
+          } else {
+            turnOff();
+            WebServer.send(200, "text/plain", "Power OFF");
+          }
+        } else
+          WebServer.send(401, "text/plain", "Unauthorized");
+      } else
+        WebServer.send(405, "text/plain", "Method Not Allowed");
+    });
+  
+    WebServer.onNotFound([]() {
+      WebServer.send(404, "text/plain", "File Not Found");
+    });
+  
+    WebServer.begin();
+    MDNS.addService("http", "tcp", ServicePort);
+    Serial.println("HTTP Server Started");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  
+    if (MDNS.begin(mDNSName)) {
+      Serial.print("mDNS responder started, mDNS name: ");
+      Serial.println(mDNSName);
+    }
+    Serial.print("Access Code: ");
+    Serial.println(AccessCode);
   }
-  Serial.print("Access Code:\n\t");
-  Serial.println(accesscode);
-  mDNSNameF.close();
-  AccessCodeF.close();
 }
+//############################# End Of Setup ##############################
 
+
+//------------------------------- Main Loop -------------------------------
 void loop(void) {
   MDNS.update();
   WebServer.handleClient();
-  buttonState = digitalRead(btn);
+  buttonState = digitalRead(Button);
   if (buttonState == LOW) {
-    Serial.println("button click");
     if (powerState == LOW) {
-      turnon();
+      turnOn();
     } else {
-      turnoff();
+      turnOff();
     }
     delay(1000);
   }
 }
+//############################ End Of Main Loop ###########################
