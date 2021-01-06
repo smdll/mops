@@ -27,3 +27,13 @@ VTables: Flash
 Bulitin LED: 1
 
 Erase Flash: All Flash Contents
+
+# Preparations
+
+Solder following pins:
+
+​	pin1 and pin2(as pin2 is EN and needs to be pulled up)
+
+​	pin6 and pin9(as pin6 is GPIO15 and needs to be pulled down)
+
+​	pin8 and pin9(as pin8 is GPIO0 and needs to be pulled down in order to use UART during firmware uploading)

@@ -143,11 +143,11 @@ void setup(void)
     WebServer.on("/switch", []() {
       if (WebServer.method() != HTTP_POST) {
         if (AccessCode.compareTo(WebServer.arg("accesscode")) == 0) {
-          bool stat = WebServer.arg("status");
-          if (stat) {
+          int stat = WebServer.arg("status").parseInt();
+          if (stat == 1) {
             turnOn();
             WebServer.send(200, "text/plain", "Power ON");
-          } else {
+          } else if (stat == 0){
             turnOff();
             WebServer.send(200, "text/plain", "Power OFF");
           }
