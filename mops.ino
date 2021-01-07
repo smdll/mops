@@ -8,7 +8,7 @@
 #include <LittleFS.h>
 #include <Ticker.h>
 
-String mDNSName;
+String mDNSName = String(ESP.getChipId());
 String AccessCode;
 const int ServicePort = 80;
 ESP8266WebServer WebServer(ServicePort);
@@ -25,16 +25,14 @@ bool shouldSaveConfig = false;
 
 
 //-------------------------- Electrical Control ---------------------------
-void turnOn()
-{
+void turnOn() {
   Serial.println("Relay On");
   digitalWrite(LED, LOW);
   digitalWrite(Relay, HIGH);
   powerState = HIGH;
 }
 
-void turnOff()
-{
+void turnOff() {
   Serial.println("Relay Off");
   digitalWrite(LED, HIGH);
   digitalWrite(Relay, LOW);
@@ -95,8 +93,7 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 
 
 //--------------------------------- Setup ---------------------------------
-void setup(void)
-{
+void setup(void) {
   Serial.begin(115200);
   pinMode(LED, OUTPUT);
   pinMode(Relay, OUTPUT);
@@ -107,7 +104,6 @@ void setup(void)
     return;
   }
 
-  // Load Config File Here
   mDNSName = readFile("/mDNSName");
   AccessCode = readFile("/AccessCode");
 
@@ -126,8 +122,9 @@ void setup(void)
     ESP.restart();
     delay(5000);
   } else {
-    digitalWrite(LED, HIGH);
-  
+    ticker.detach();
+    turnOff();
+
     if (shouldSaveConfig) {
       mDNSName = custom_mdnsname.getValue();
       AccessCode = custom_accesscode.getValue();
@@ -135,38 +132,40 @@ void setup(void)
       writeFile("/mDNSName", mDNSName);
       writeFile("/AccessCode", AccessCode);
     }
-  
+
     WebServer.on("/", []() {
       WebServer.send(200, "text/plain", String(powerState));
     });
-  
+
     WebServer.on("/switch", []() {
-      if (WebServer.method() != HTTP_POST) {
+      if (WebServer.method() == HTTP_POST) {
         if (AccessCode.compareTo(WebServer.arg("accesscode")) == 0) {
-          int stat = WebServer.arg("status").parseInt();
+          int stat = WebServer.arg("status").toInt();
           if (stat == 1) {
             turnOn();
             WebServer.send(200, "text/plain", "Power ON");
-          } else if (stat == 0){
+          } else if (stat == 0) {
             turnOff();
             WebServer.send(200, "text/plain", "Power OFF");
           }
-        } else
+        } else {
           WebServer.send(401, "text/plain", "Unauthorized");
-      } else
+        }
+      } else {
         WebServer.send(405, "text/plain", "Method Not Allowed");
+      }
     });
-  
+
     WebServer.onNotFound([]() {
       WebServer.send(404, "text/plain", "File Not Found");
     });
-  
+
     WebServer.begin();
     MDNS.addService("http", "tcp", ServicePort);
     Serial.println("HTTP Server Started");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-  
+
     if (MDNS.begin(mDNSName)) {
       Serial.print("mDNS responder started, mDNS name: ");
       Serial.println(mDNSName);
@@ -189,7 +188,7 @@ void loop(void) {
     } else {
       turnOff();
     }
-    delay(1000);
+    delay(50);
   }
 }
 //############################ End Of Main Loop ###########################
